@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -40,6 +40,11 @@ class TutorProfile(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     avatar_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    views_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    contacts_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    shown_today_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_stats_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -49,6 +54,22 @@ class TutorProfile(Base):
 
     user: Mapped["User"] = relationship(back_populates="tutor_profile")
     applications: Mapped[list["Application"]] = relationship(back_populates="tutor")
+    contacts: Mapped[list["TutorContact"]] = relationship(back_populates="tutor")
+
+
+class TutorContact(Base):
+    __tablename__ = "tutor_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tutor_id: Mapped[int] = mapped_column(ForeignKey("tutor_profiles.id"), nullable=False)
+    student_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    tutor: Mapped["TutorProfile"] = relationship(back_populates="contacts")
+
+    __table_args__ = (
+        UniqueConstraint("tutor_id", "student_telegram_id", name="uq_tutor_contacts_tutor_student"),
+    )
 
 
 class StudentSearch(Base):

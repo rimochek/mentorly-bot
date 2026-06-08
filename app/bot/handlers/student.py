@@ -20,7 +20,9 @@ from app.database.repositories.searches import SearchRepository
 from app.database.repositories.tutors import TutorRepository
 from app.database.repositories.users import UserRepository
 from app.services.notifications import NotificationService, build_contact_keyboard
-from app.services.search import format_tutor_card, parse_budget, search_tutors
+from app.services.search import parse_budget, search_tutors
+from app.services.tutor_card import send_tutor_card
+from app.services.tutor_stats import increment_tutor_contact, increment_tutor_view
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -65,17 +67,9 @@ async def _show_tutor_at_index(
         return
 
     await state.update_data(current_index=index)
-    card_text = format_tutor_card(tutor)
     keyboard = tutor_card_keyboard(tutor.id)
-
-    if tutor.avatar_file_id:
-        await message.answer_photo(
-            photo=tutor.avatar_file_id,
-            caption=card_text,
-            reply_markup=keyboard,
-        )
-    else:
-        await message.answer(card_text, reply_markup=keyboard)
+    await send_tutor_card(message, tutor, reply_markup=keyboard, session=session)
+    await increment_tutor_view(session, tutor.id)
 
 
 @router.message(F.text == "🔎 Найти репетитора")
@@ -236,6 +230,8 @@ async def contact_tutor(
     if not tutor or not tutor.user:
         await callback.answer("Репетитор не найден", show_alert=True)
         return
+
+    await increment_tutor_contact(session, tutor.id, callback.from_user.id)
 
     app_repo = ApplicationRepository(session)
     application = await app_repo.create(

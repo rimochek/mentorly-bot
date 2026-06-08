@@ -18,7 +18,8 @@ from app.database.repositories.tutors import TutorRepository
 from app.database.repositories.users import UserRepository
 from app.services.geocoding import get_city_from_coordinates
 from app.services.notifications import NotificationService
-from app.services.search import format_tutor_card
+from app.services.tutor_card import TUTOR_DESCRIPTION_MAX, send_tutor_card
+from app.services.tutor_stats import format_tutor_stats
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -32,7 +33,8 @@ DESCRIPTION_PROMPT = (
     "• о себе\n\n"
     "Пример:\n"
     "Готовлю к IELTS и SAT. IELTS 8.0, SAT 1500. Учусь в NU. "
-    "Помогаю с Writing, Speaking и SAT Math. Занятия онлайн."
+    "Помогаю с Writing, Speaking и SAT Math. Занятия онлайн.\n\n"
+    f"Максимум {TUTOR_DESCRIPTION_MAX} символов."
 )
 
 EDIT_FIELD_PROMPTS = {
@@ -62,11 +64,7 @@ async def _show_tutor_card(message: Message, session: AsyncSession, telegram_id:
         await message.answer("Анкета не найдена.", reply_markup=main_menu_keyboard())
         return
 
-    card_text = format_tutor_card(profile)
-    if profile.avatar_file_id:
-        await message.answer_photo(photo=profile.avatar_file_id, caption=card_text)
-    else:
-        await message.answer(card_text)
+    await send_tutor_card(message, profile, session=session)
 
 
 @router.message(F.text == "🧑‍🏫 Стать репетитором")
@@ -179,7 +177,14 @@ async def reg_price_max(message: Message, state: FSMContext) -> None:
 
 @router.message(TutorRegistrationStates.description)
 async def reg_description(message: Message, state: FSMContext) -> None:
-    await state.update_data(description=message.text.strip())
+    description = message.text.strip()
+    if len(description) > TUTOR_DESCRIPTION_MAX:
+        await message.answer(
+            f"Описание слишком длинное. Максимум {TUTOR_DESCRIPTION_MAX} символов "
+            f"(сейчас {len(description)})."
+        )
+        return
+    await state.update_data(description=description)
     await state.set_state(TutorRegistrationStates.photo)
     await message.answer(
         "Отправьте фото профиля или нажмите «Пропустить».",
@@ -260,6 +265,23 @@ async def my_tutor_profile(message: Message, session: AsyncSession) -> None:
     await _show_tutor_card(message, session, message.from_user.id)
 
 
+@router.message(F.text == "📊 Моя статистика")
+async def my_tutor_stats(message: Message, session: AsyncSession) -> None:
+    user_repo = UserRepository(session)
+    user = await user_repo.get_by_telegram_id(message.from_user.id)
+    if not user:
+        await message.answer("Ошибка. Нажмите /start", reply_markup=main_menu_keyboard())
+        return
+
+    tutor_repo = TutorRepository(session)
+    profile = await tutor_repo.get_by_user_id(user.id)
+    if not profile:
+        await message.answer("Анкета не найдена.", reply_markup=main_menu_keyboard())
+        return
+
+    await message.answer(format_tutor_stats(profile), reply_markup=tutor_cabinet_keyboard())
+
+
 @router.message(F.text == "✏️ Редактировать анкету")
 async def edit_profile_menu(message: Message) -> None:
     await message.answer("Что вы хотите изменить?", reply_markup=edit_profile_keyboard())
@@ -320,6 +342,12 @@ async def edit_field_value(message: Message, state: FSMContext, session: AsyncSe
         return
 
     value: str | int = message.text.strip()
+    if field == "description" and len(value) > TUTOR_DESCRIPTION_MAX:
+        await message.answer(
+            f"Описание слишком длинное. Максимум {TUTOR_DESCRIPTION_MAX} символов "
+            f"(сейчас {len(value)})."
+        )
+        return
     if field in ("age", "price_min", "price_max"):
         try:
             value = int(value)
