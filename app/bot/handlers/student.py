@@ -56,7 +56,7 @@ async def _show_tutor_at_index(
 
     if not tutor_ids or index >= len(tutor_ids):
         await state.clear()
-        await message.answer("Больше репетиторов нет.", reply_markup=main_menu_keyboard())
+        await message.answer("По данным запросам больше нету репетиторов.\nПриходите позже, список обновляется ежедневно!", reply_markup=main_menu_keyboard())
         return
 
     tutor_repo = TutorRepository(session)

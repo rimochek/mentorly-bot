@@ -28,7 +28,7 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) 
         full_name=message.from_user.full_name,
     )
     await message.answer(
-        "Привет! Я помогу найти репетитора для подготовки к экзаменам.",
+        'Привет! Я помогу найти репетитора для подготовки к экзаменам. Нажмите кнопку "🔎 Найти репетитора", чтобы начать поиск!',
         reply_markup=main_menu_keyboard(),
     )
 
