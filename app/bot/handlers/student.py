@@ -19,7 +19,8 @@ from app.database.repositories.applications import ApplicationRepository
 from app.database.repositories.searches import SearchRepository
 from app.database.repositories.tutors import TutorRepository
 from app.database.repositories.users import UserRepository
-from app.services.notifications import NotificationService, build_contact_keyboard
+from app.services.notifications import NotificationService
+from app.services.user_contact import build_contact_keyboard
 from app.services.search import parse_budget, search_tutors
 from app.services.tutor_card import send_tutor_card
 from app.services.tutor_stats import increment_tutor_contact, increment_tutor_view
@@ -246,9 +247,17 @@ async def contact_tutor(
     notifications = NotificationService(bot)
     await notifications.notify_new_application(application, student, tutor, tutor.user)
 
-    reply_markup = build_contact_keyboard(tutor.user.username)
+    reply_markup = build_contact_keyboard(tutor.user, "Открыть чат с репетитором")
+    confirmation_text = (
+        "Заявка отправлена ✅ Репетитор или администратор скоро свяжется с вами."
+    )
+    if not tutor.user.username:
+        confirmation_text += (
+            "\n\nЕсли кнопка не открывает чат, репетитор или администратор "
+            "свяжется с вами через бота."
+        )
     await callback.message.answer(
-        "Заявка отправлена ✅ Репетитор или администратор скоро свяжется с вами.",
+        confirmation_text,
         reply_markup=reply_markup,
     )
     await callback.answer()
