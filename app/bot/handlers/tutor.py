@@ -14,11 +14,12 @@ from app.bot.keyboards.reply import (
     tutor_cabinet_keyboard,
 )
 from app.bot.states.tutor import TutorEditStates, TutorRegistrationStates
-from app.database.repositories.tutors import TutorRepository
+from app.database.repositories.tutors import TutorRepository, MODERATION_APPROVED
 from app.database.repositories.users import UserRepository
 from app.services.geocoding import get_city_from_coordinates
 from app.services.notifications import NotificationService
-from app.services.tutor_card import TUTOR_DESCRIPTION_MAX, send_tutor_card
+from app.services.analytics import EVENT_SUPPORT, EVENT_TUTOR, track_event
+from app.services.tutor_card import TUTOR_DESCRIPTION_MAX, format_moderation_status, send_tutor_card
 from app.services.tutor_stats import format_tutor_stats
 
 router = Router()
@@ -63,6 +64,10 @@ async def _show_tutor_card(message: Message, session: AsyncSession, telegram_id:
     if not profile:
         await message.answer("Анкета не найдена.", reply_markup=main_menu_keyboard())
         return
+
+    moderation_line = format_moderation_status(profile)
+    if moderation_line:
+        await message.answer(moderation_line)
 
     await send_tutor_card(message, profile, session=session)
 
@@ -253,6 +258,14 @@ async def _finish_registration(
     notifications = NotificationService(bot)
     await notifications.notify_new_tutor_profile(profile, user)
 
+    await track_event(
+        message.from_user.id,
+        EVENT_TUTOR,
+        "profile_created",
+        user_id=user.id,
+        properties={"tutor_id": profile.id},
+    )
+
     await state.clear()
     await message.answer(
         "Анкета создана ✅ Ученики смогут найти вас по ключевым словам в описании.",
@@ -428,4 +441,11 @@ async def toggle_profile(message: Message, session: AsyncSession) -> None:
 
     profile = await tutor_repo.toggle_active(profile)
     status = "включена ✅" if profile.is_active else "выключена ⏸"
-    await message.answer(f"Анкета {status}", reply_markup=tutor_cabinet_keyboard())
+    text = f"Анкета {status}"
+    if profile.moderation_status != MODERATION_APPROVED:
+        text += "\n\nАнкета не отображается в поиске: действует решение модератора."
+    elif profile.is_active:
+        text += "\n\nАнкета видна ученикам в поиске."
+    else:
+        text += "\n\nАнкета скрыта из поиска (выключена вами)."
+    await message.answer(text, reply_markup=tutor_cabinet_keyboard())

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.database.models import TutorProfile
+from app.database.repositories.tutors import MODERATION_APPROVED
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,8 @@ def search_tutors(
     for tutor in tutors:
         if not tutor.is_active:
             continue
+        if tutor.moderation_status != MODERATION_APPROVED:
+            continue
         if not description_matches(tutor.description, keywords, exam):
             continue
 
@@ -237,15 +240,18 @@ def search_tutors(
     logger.info("Tutors matched after filtering: %d", len(scored))
     for item in scored:
         logger.info(
-            "Tutor candidate: id=%s name=%s score=%s views=%s shown_today=%s",
+            "Tutor candidate: id=%s name=%s score=%s verified=%s views=%s shown_today=%s",
             item.tutor.id,
             item.tutor.name,
             item.score,
+            item.tutor.is_verified,
             item.tutor.views_count,
             item.tutor.shown_today_count,
         )
 
-    ranked = _shuffle_close_scores(scored)
+    verified = [item for item in scored if item.tutor.is_verified]
+    non_verified = [item for item in scored if not item.tutor.is_verified]
+    ranked = _shuffle_close_scores(verified) + _shuffle_close_scores(non_verified)
     return [item.tutor for item in ranked]
 
 

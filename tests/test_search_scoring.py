@@ -119,6 +119,41 @@ class TestSearchTutors:
         assert len(result) == 1
         assert result[0].id == 1
 
+    def test_excludes_hidden_tutors(self) -> None:
+        visible = make_tutor(id=1, description="IELTS 8.0")
+        hidden = make_tutor(id=2, moderation_status="hidden", description="IELTS tutor")
+        result = search_tutors([visible, hidden], "IELTS", 3000, 5000)
+        assert len(result) == 1
+        assert result[0].id == 1
+
+    def test_verified_tutors_appear_first(self) -> None:
+        verified = make_tutor(
+            id=1,
+            is_verified=True,
+            views_count=50,
+            shown_today_count=15,
+            price_min=9000,
+            price_max=12000,
+            description="IELTS prep",
+            last_shown_at=datetime.now(timezone.utc),
+        )
+        regular = make_tutor(
+            id=2,
+            is_verified=False,
+            views_count=0,
+            price_min=4000,
+            price_max=5000,
+            description="IELTS 8.0",
+        )
+        random.seed(42)
+        result = search_tutors([regular, verified], "IELTS", 3000, 5000)
+        assert result[0].id == 1
+
+    def test_verified_without_exam_match_excluded(self) -> None:
+        verified = make_tutor(id=1, is_verified=True, description="Only SAT prep")
+        result = search_tutors([verified], "IELTS", 3000, 5000)
+        assert result == []
+
     def test_sorts_by_score_desc(self) -> None:
         high = make_tutor(
             id=1,

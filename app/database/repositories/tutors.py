@@ -1,8 +1,14 @@
-from sqlalchemy import select
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database.models import TutorProfile
+
+MODERATION_APPROVED = "approved"
+MODERATION_HIDDEN = "hidden"
+MODERATION_REJECTED = "rejected"
 
 
 class TutorRepository:
@@ -29,10 +35,60 @@ class TutorRepository:
         result = await self.session.execute(
             select(TutorProfile)
             .options(selectinload(TutorProfile.user))
-            .where(TutorProfile.is_active.is_(True))
+            .where(
+                TutorProfile.is_active.is_(True),
+                TutorProfile.moderation_status == MODERATION_APPROVED,
+            )
             .order_by(TutorProfile.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def get_all_ordered(self, filter_type: str = "all") -> list[TutorProfile]:
+        query = (
+            select(TutorProfile)
+            .options(selectinload(TutorProfile.user))
+            .order_by(TutorProfile.created_at.desc())
+        )
+        if filter_type == "hidden":
+            query = query.where(
+                TutorProfile.moderation_status.in_([MODERATION_HIDDEN, MODERATION_REJECTED])
+            )
+        elif filter_type == "recent":
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            query = query.where(TutorProfile.created_at >= since)
+
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_moderation_counts(self) -> dict[str, int]:
+        total = await self.session.scalar(select(func.count()).select_from(TutorProfile)) or 0
+        approved = await self.session.scalar(
+            select(func.count())
+            .select_from(TutorProfile)
+            .where(TutorProfile.moderation_status == MODERATION_APPROVED)
+        ) or 0
+        hidden = await self.session.scalar(
+            select(func.count())
+            .select_from(TutorProfile)
+            .where(TutorProfile.moderation_status == MODERATION_HIDDEN)
+        ) or 0
+        rejected = await self.session.scalar(
+            select(func.count())
+            .select_from(TutorProfile)
+            .where(TutorProfile.moderation_status == MODERATION_REJECTED)
+        ) or 0
+        verified = await self.session.scalar(
+            select(func.count())
+            .select_from(TutorProfile)
+            .where(TutorProfile.is_verified.is_(True))
+        ) or 0
+        return {
+            "total": total,
+            "approved": approved,
+            "hidden": hidden,
+            "rejected": rejected,
+            "verified": verified,
+        }
 
     async def create(
         self,
@@ -70,6 +126,21 @@ class TutorRepository:
 
     async def toggle_active(self, profile: TutorProfile) -> TutorProfile:
         profile.is_active = not profile.is_active
+        await self.session.commit()
+        await self.session.refresh(profile)
+        return profile
+
+    async def set_moderation_status(self, profile: TutorProfile, status: str) -> TutorProfile:
+        profile.moderation_status = status
+        profile.moderated_at = datetime.now(timezone.utc)
+        await self.session.commit()
+        await self.session.refresh(profile)
+        return profile
+
+    async def toggle_verified(self, profile: TutorProfile) -> TutorProfile:
+        profile.is_verified = not profile.is_verified
+        profile.verified_at = datetime.now(timezone.utc) if profile.is_verified else None
+        profile.moderated_at = datetime.now(timezone.utc)
         await self.session.commit()
         await self.session.refresh(profile)
         return profile

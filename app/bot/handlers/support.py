@@ -7,6 +7,7 @@ from app.bot.keyboards.reply import MAIN_MENU_BUTTONS, main_menu_keyboard
 from app.bot.states.support import SupportStates
 from app.database.repositories.users import UserRepository
 from app.services.notifications import NotificationService
+from app.services.analytics import EVENT_SUPPORT, track_event
 
 router = Router()
 
@@ -41,6 +42,13 @@ async def process_support_message(
 
     notifications = NotificationService(bot)
     await notifications.notify_support_complaint(user, message.text.strip())
+
+    await track_event(
+        message.from_user.id,
+        EVENT_SUPPORT,
+        "complaint_submitted",
+        user_id=user.id,
+    )
 
     await state.clear()
     await message.answer(

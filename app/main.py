@@ -9,6 +9,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
 from app.bot.handlers import setup_routers
+from app.bot.middlewares.analytics import AnalyticsMiddleware
 from app.bot.middlewares.db import DbSessionMiddleware
 from app.config import get_settings
 
@@ -33,6 +34,7 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
 
     dp.update.middleware(DbSessionMiddleware())
+    dp.update.middleware(AnalyticsMiddleware())
     dp.include_router(setup_routers())
 
     logger.info("Bot starting...")

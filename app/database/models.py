@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -16,9 +16,12 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    visit_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tutor_profile: Mapped["TutorProfile | None"] = relationship(back_populates="user", uselist=False)
+    analytics_events: Mapped[list["AnalyticsEvent"]] = relationship(back_populates="user")
     searches: Mapped[list["StudentSearch"]] = relationship(back_populates="user")
     applications: Mapped[list["Application"]] = relationship(
         back_populates="student",
@@ -40,6 +43,10 @@ class TutorProfile(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     avatar_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    moderation_status: Mapped[str] = mapped_column(String(20), default="approved", server_default="approved")
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    moderated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     views_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     contacts_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -102,3 +109,17 @@ class Application(Base):
 
     student: Mapped["User"] = relationship(back_populates="applications", foreign_keys=[student_id])
     tutor: Mapped["TutorProfile"] = relationship(back_populates="applications")
+
+
+class AnalyticsEvent(Base):
+    __tablename__ = "analytics_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    properties: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User | None"] = relationship(back_populates="analytics_events")

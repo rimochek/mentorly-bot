@@ -20,6 +20,12 @@ from app.database.repositories.searches import SearchRepository
 from app.database.repositories.tutors import TutorRepository
 from app.database.repositories.users import UserRepository
 from app.services.notifications import NotificationService
+from app.services.analytics import (
+    EVENT_BROWSE,
+    EVENT_CONTACT,
+    EVENT_SEARCH,
+    track_event,
+)
 from app.services.user_contact import build_contact_keyboard
 from app.services.search import parse_budget, search_tutors
 from app.services.tutor_card import send_tutor_card
@@ -46,6 +52,15 @@ async def _get_browse_data(state: FSMContext) -> dict:
     }
 
 
+async def _track_browse_end(telegram_id: int, reason: str, cards_viewed: int) -> None:
+    await track_event(
+        telegram_id,
+        EVENT_BROWSE,
+        "browse_end",
+        properties={"reason": reason, "cards_viewed": cards_viewed},
+    )
+
+
 async def _show_tutor_at_index(
     message: Message,
     session: AsyncSession,
@@ -56,6 +71,8 @@ async def _show_tutor_at_index(
     tutor_ids: list[int] = data["tutor_ids"]
 
     if not tutor_ids or index >= len(tutor_ids):
+        if tutor_ids and index >= len(tutor_ids):
+            await _track_browse_end(message.from_user.id, "exhausted", len(tutor_ids))
         await state.clear()
         await message.answer("По данным запросам больше нету репетиторов.\nПриходите позже, список обновляется ежедневно!", reply_markup=main_menu_keyboard())
         return
@@ -71,6 +88,12 @@ async def _show_tutor_at_index(
     keyboard = tutor_card_keyboard(tutor.id)
     await send_tutor_card(message, tutor, reply_markup=keyboard, session=session)
     await increment_tutor_view(session, tutor.id)
+    await track_event(
+        message.from_user.id,
+        EVENT_BROWSE,
+        "tutor_viewed",
+        properties={"tutor_id": tutor.id, "index": index, "total": len(tutor_ids)},
+    )
 
 
 @router.message(F.text == "🔎 Найти репетитора")
@@ -167,6 +190,20 @@ async def process_budget(
     matched = search_tutors(tutors, exam, budget_min, budget_max)
 
     if not matched:
+        await track_event(
+            message.from_user.id,
+            EVENT_SEARCH,
+            "search_no_match",
+            user_id=user.id,
+            properties={
+                "exam": exam,
+                "goal": goal,
+                "level": level,
+                "budget_text": budget_text,
+                "search_id": search.id,
+                "matched_count": 0,
+            },
+        )
         await message.answer(NO_MATCH_TEXT, reply_markup=main_menu_keyboard())
         notifications = NotificationService(bot)
         await notifications.notify_unmatched_search(search, user)
@@ -174,6 +211,20 @@ async def process_budget(
         return
 
     tutor_ids = [t.id for t in matched]
+    await track_event(
+        message.from_user.id,
+        EVENT_SEARCH,
+        "search_completed",
+        user_id=user.id,
+        properties={
+            "exam": exam,
+            "goal": goal,
+            "level": level,
+            "budget_text": budget_text,
+            "search_id": search.id,
+            "matched_count": len(tutor_ids),
+        },
+    )
     await state.update_data(
         tutor_ids=tutor_ids,
         current_index=0,
@@ -194,6 +245,12 @@ async def process_budget(
 async def next_tutor_reply(message: Message, session: AsyncSession, state: FSMContext) -> None:
     data = await _get_browse_data(state)
     next_index = data["current_index"] + 1
+    await track_event(
+        message.from_user.id,
+        EVENT_BROWSE,
+        "browse_next",
+        properties={"index": next_index},
+    )
     await _show_tutor_at_index(message, session, state, next_index)
 
 
@@ -202,6 +259,13 @@ async def next_tutor_callback(callback: CallbackQuery, session: AsyncSession, st
     data = await _get_browse_data(state)
     next_index = data["current_index"] + 1
     await callback.answer()
+    if callback.from_user:
+        await track_event(
+            callback.from_user.id,
+            EVENT_BROWSE,
+            "browse_next",
+            properties={"index": next_index},
+        )
     if callback.message:
         await _show_tutor_at_index(callback.message, session, state, next_index)
 
@@ -247,6 +311,14 @@ async def contact_tutor(
     notifications = NotificationService(bot)
     await notifications.notify_new_application(application, student, tutor, tutor.user)
 
+    await track_event(
+        callback.from_user.id,
+        EVENT_CONTACT,
+        "application_sent",
+        user_id=student.id,
+        properties={"tutor_id": tutor.id, "application_id": application.id},
+    )
+
     reply_markup = build_contact_keyboard(tutor.user, "Открыть чат с репетитором")
     confirmation_text = (
         "Заявка отправлена ✅ Репетитор или администратор скоро свяжется с вами."
@@ -265,6 +337,10 @@ async def contact_tutor(
 
 @router.callback_query(F.data == "main_menu")
 async def browse_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user:
+        data = await state.get_data()
+        cards_viewed = data.get("current_index", 0) + 1
+        await _track_browse_end(callback.from_user.id, "main_menu", cards_viewed)
     await state.clear()
     await callback.answer()
     if callback.message:

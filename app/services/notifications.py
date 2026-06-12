@@ -4,7 +4,9 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
 
 from app.config import get_settings
+from app.bot.keyboards.admin import admin_moderation_keyboard
 from app.database.models import Application, StudentSearch, TutorProfile, User
+from app.services.tutor_card import send_tutor_card_to_chat
 from app.services.user_contact import (
     build_contact_keyboard,
     build_dual_contact_keyboard,
@@ -31,17 +33,17 @@ class NotificationService:
                 logger.exception("Failed to notify admin %s", admin_id)
 
     async def notify_new_tutor_profile(self, profile: TutorProfile, user: User) -> None:
-        text = (
-            "Новая анкета репетитора:\n\n"
-            f"{profile.name}\n"
-            f"{profile.city}\n"
-            f"{profile.place_of_study}\n"
-            f"{profile.price_min}–{profile.price_max} ₸\n"
-            f"{profile.description}\n\n"
-            f"Контакт: {format_user_display(user)}"
-        )
-        keyboard = build_contact_keyboard(user, "Написать репетитору")
-        await self._notify_admins(text, reply_markup=keyboard)
+        keyboard = admin_moderation_keyboard(profile, user)
+        for admin_id in self.admin_ids:
+            try:
+                await send_tutor_card_to_chat(
+                    self.bot,
+                    admin_id,
+                    profile,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                logger.exception("Failed to notify admin %s about new tutor profile", admin_id)
 
     async def notify_new_application(
         self,

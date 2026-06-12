@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,14 +24,14 @@ class UserRepository:
         telegram_id: int,
         username: str | None,
         full_name: str | None,
-    ) -> User:
+    ) -> tuple[User, bool]:
         user = await self.get_by_telegram_id(telegram_id)
         if user:
             user.username = username
             user.full_name = full_name
             await self.session.commit()
             await self.session.refresh(user)
-            return user
+            return user, False
 
         user = User(
             telegram_id=telegram_id,
@@ -37,6 +39,14 @@ class UserRepository:
             full_name=full_name,
         )
         self.session.add(user)
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user, True
+
+    async def record_visit(self, user: User) -> User:
+        now = datetime.now(timezone.utc)
+        user.last_seen_at = now
+        user.visit_count = (user.visit_count or 0) + 1
         await self.session.commit()
         await self.session.refresh(user)
         return user
