@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     postgres_user: str = "mentorly"
     postgres_password: str = "mentorly"
 
-    redis_host: str = "localhost"
+    redis_host: str = "redis"
     redis_port: int = 6379
     redis_db: int = 0
 
