@@ -11,14 +11,16 @@ from app.services.search import (
     _shuffle_close_scores,
     budget_fully_fits,
     budget_overlaps,
+    calculate_fallback_tutor_score,
     calculate_tutor_score,
     description_matches,
+    description_matches_subjects,
     get_exam_match_score,
     get_search_keywords,
     parse_budget,
     search_tutors,
 )
-from app.services.search_config import get_goal_match_score, resolve_exam_detail
+from app.services.search_config import get_fallback_keywords, get_goal_match_score, resolve_exam_detail
 
 from tests.conftest import make_tutor
 
@@ -116,14 +118,14 @@ class TestSearchTutors:
     def test_excludes_inactive_tutors(self) -> None:
         active = make_tutor(id=1, is_active=True)
         inactive = make_tutor(id=2, is_active=False, description="IELTS tutor")
-        result = search_tutors([active, inactive], "IELTS", 3000, 5000)
+        result, _primary_count = search_tutors([active, inactive], "IELTS", 3000, 5000)
         assert len(result) == 1
         assert result[0].id == 1
 
     def test_excludes_hidden_tutors(self) -> None:
         visible = make_tutor(id=1, description="IELTS 8.0")
         hidden = make_tutor(id=2, moderation_status="hidden", description="IELTS tutor")
-        result = search_tutors([visible, hidden], "IELTS", 3000, 5000)
+        result, _primary_count = search_tutors([visible, hidden], "IELTS", 3000, 5000)
         assert len(result) == 1
         assert result[0].id == 1
 
@@ -147,7 +149,7 @@ class TestSearchTutors:
             description="IELTS 8.0",
         )
         random.seed(42)
-        result = search_tutors([verified, regular], "IELTS", 3000, 5000)
+        result, _primary_count = search_tutors([verified, regular], "IELTS", 3000, 5000)
         assert result[0].id == 2
 
     def test_verified_bonus_adds_eight_points(self) -> None:
@@ -162,7 +164,7 @@ class TestSearchTutors:
 
     def test_verified_without_exam_match_excluded(self) -> None:
         verified = make_tutor(id=1, is_verified=True, description="Only SAT prep")
-        result = search_tutors([verified], "IELTS", 3000, 5000)
+        result, _primary_count = search_tutors([verified], "IELTS", 3000, 5000)
         assert result == []
 
     def test_sorts_by_score_desc(self) -> None:
@@ -183,7 +185,7 @@ class TestSearchTutors:
             last_shown_at=datetime.now(timezone.utc),
         )
         random.seed(42)
-        result = search_tutors([low, high], "IELTS", 3000, 5000)
+        result, _primary_count = search_tutors([low, high], "IELTS", 3000, 5000)
         assert result[0].id == 1
 
     def test_shuffle_groups_close_scores(self) -> None:
@@ -215,7 +217,7 @@ class TestGoalSoftMatch:
     def test_goal_no_match_still_in_results(self) -> None:
         generic = make_tutor(id=1, description="IELTS tutor")
         specific = make_tutor(id=2, description="IELTS band 7.0 specialist")
-        result = search_tutors([generic, specific], "IELTS", 3000, 5000, goal="7.0")
+        result, _primary_count = search_tutors([generic, specific], "IELTS", 3000, 5000, goal="7.0")
         assert len(result) == 2
         assert result[0].id == 2
 
@@ -223,3 +225,60 @@ class TestGoalSoftMatch:
         assert resolve_exam_detail("ЕНТ", "Физмат") == "Физмат"
         assert resolve_exam_detail("ЕНТ", "Био + География") == "Биология + География"
         assert resolve_exam_detail("AP", "Biology") == "AP Biology"
+
+
+class TestFallbackSearch:
+    def test_rfmsh_primary_before_math_fallback(self) -> None:
+        primary = make_tutor(id=1, description="Подготовка к РФМШ")
+        fallback = make_tutor(id=2, description="Логика и математика для школьников")
+        result, primary_count = search_tutors([fallback, primary], "РФМШ", 3000, 5000)
+        assert len(result) == 2
+        assert primary_count == 1
+        assert result[0].id == 1
+        assert result[1].id == 2
+
+    def test_ielts_primary_before_english_fallback(self) -> None:
+        primary = make_tutor(id=1, description="IELTS band 7.0")
+        fallback = make_tutor(id=2, description="Английский язык, speaking и writing")
+        result, primary_count = search_tutors([fallback, primary], "IELTS", 3000, 5000)
+        assert len(result) == 2
+        assert primary_count == 1
+        assert result[0].id == 1
+        assert result[1].id == 2
+
+    def test_no_duplicate_when_primary_and_fallback_match(self) -> None:
+        both = make_tutor(id=1, description="IELTS и английский язык")
+        result, primary_count = search_tutors([both], "IELTS", 3000, 5000)
+        assert len(result) == 1
+        assert primary_count == 1
+
+    def test_fallback_only_when_no_primary(self) -> None:
+        fallback = make_tutor(id=1, description="Математика и логика")
+        result, primary_count = search_tutors([fallback], "РФМШ", 3000, 5000)
+        assert len(result) == 1
+        assert primary_count == 0
+        assert result[0].id == 1
+
+    def test_nis_fallback_keywords(self) -> None:
+        keywords = get_fallback_keywords("NIS", "Математика")
+        assert "математика" in keywords
+        assert "логика" in keywords
+
+    def test_ent_fallback_from_profile(self) -> None:
+        tutor = make_tutor(description="ЕНТ физмат, математика и физика")
+        keywords = get_fallback_keywords("ЕНТ", "Физмат")
+        assert description_matches_subjects(tutor.description, keywords)
+
+    def test_fallback_score_lower_than_primary(self) -> None:
+        filters = StudentFilters(exam="IELTS", goal="", budget_min=3000, budget_max=5000)
+        primary = make_tutor(description="IELTS tutor")
+        fallback = make_tutor(id=2, description="English speaking practice")
+        primary_score = calculate_tutor_score(primary, filters)
+        fallback_score = calculate_fallback_tutor_score(
+            fallback,
+            filters,
+            get_fallback_keywords("IELTS", ""),
+        )
+        assert primary_score is not None
+        assert fallback_score is not None
+        assert primary_score > fallback_score

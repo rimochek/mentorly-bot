@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from app.database.models import TutorProfile
 from app.database.repositories.tutors import MODERATION_APPROVED
-from app.services.search_config import get_goal_match_score
+from app.services.search_config import get_fallback_keywords, get_goal_match_score
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ BUDGET_RANGES: dict[str, tuple[int | None, int | None]] = {
 
 SCORE_SHUFFLE_THRESHOLD = 10
 VERIFIED_BONUS = 8
+FALLBACK_SUBJECT_SCORE = 25
 
 
 @dataclass
@@ -93,6 +94,18 @@ def get_exam_match_score(description: str, keywords: list[str], exam: str) -> in
 
 def description_matches(description: str, keywords: list[str], exam: str) -> bool:
     return get_exam_match_score(description, keywords, exam) is not None
+
+
+def get_subject_match_score(description: str, subject_keywords: list[str]) -> int | None:
+    description_lower = description.lower()
+    for keyword in subject_keywords:
+        if keyword.lower() in description_lower:
+            return FALLBACK_SUBJECT_SCORE
+    return None
+
+
+def description_matches_subjects(description: str, subject_keywords: list[str]) -> bool:
+    return get_subject_match_score(description, subject_keywords) is not None
 
 
 def budget_overlaps(
@@ -177,15 +190,14 @@ def _verified_bonus(tutor: TutorProfile) -> int:
     return VERIFIED_BONUS if tutor.is_verified else 0
 
 
-def calculate_tutor_score(tutor: TutorProfile, student_filters: StudentFilters) -> int | None:
-    keywords = get_search_keywords(student_filters.exam)
-    exam_match_score = get_exam_match_score(tutor.description, keywords, student_filters.exam)
-    if exam_match_score is None:
-        return None
-
+def _compose_tutor_score(
+    tutor: TutorProfile,
+    student_filters: StudentFilters,
+    base_match_score: int,
+) -> int:
     now = datetime.now(timezone.utc)
-    score = (
-        exam_match_score
+    return (
+        base_match_score
         + get_goal_match_score(tutor.description, student_filters.exam, student_filters.goal)
         + _budget_match_score(tutor, student_filters.budget_min, student_filters.budget_max)
         + _fairness_score(tutor)
@@ -193,7 +205,25 @@ def calculate_tutor_score(tutor: TutorProfile, student_filters: StudentFilters) 
         + _activity_penalty(tutor)
         + _verified_bonus(tutor)
     )
-    return score
+
+
+def calculate_tutor_score(tutor: TutorProfile, student_filters: StudentFilters) -> int | None:
+    keywords = get_search_keywords(student_filters.exam)
+    exam_match_score = get_exam_match_score(tutor.description, keywords, student_filters.exam)
+    if exam_match_score is None:
+        return None
+    return _compose_tutor_score(tutor, student_filters, exam_match_score)
+
+
+def calculate_fallback_tutor_score(
+    tutor: TutorProfile,
+    student_filters: StudentFilters,
+    subject_keywords: list[str],
+) -> int | None:
+    subject_match_score = get_subject_match_score(tutor.description, subject_keywords)
+    if subject_match_score is None:
+        return None
+    return _compose_tutor_score(tutor, student_filters, subject_match_score)
 
 
 def _shuffle_close_scores(scored: list[ScoredTutor]) -> list[ScoredTutor]:
@@ -223,39 +253,16 @@ def _shuffle_close_scores(scored: list[ScoredTutor]) -> list[ScoredTutor]:
     return result
 
 
-def search_tutors(
-    tutors: list[TutorProfile],
-    exam: str,
-    budget_min: int | None,
-    budget_max: int | None,
-    goal: str = "",
-) -> list[TutorProfile]:
-    student_filters = StudentFilters(
-        exam=exam,
-        goal=goal,
-        budget_min=budget_min,
-        budget_max=budget_max,
-    )
-    keywords = get_search_keywords(exam)
-    scored: list[ScoredTutor] = []
+def _is_eligible_tutor(tutor: TutorProfile) -> bool:
+    return tutor.is_active and tutor.moderation_status == MODERATION_APPROVED
 
-    for tutor in tutors:
-        if not tutor.is_active:
-            continue
-        if tutor.moderation_status != MODERATION_APPROVED:
-            continue
-        if not description_matches(tutor.description, keywords, exam):
-            continue
 
-        score = calculate_tutor_score(tutor, student_filters)
-        if score is None:
-            continue
-        scored.append(ScoredTutor(tutor=tutor, score=score))
-
-    logger.info("Tutors matched after filtering: %d", len(scored))
+def _rank_tutors(scored: list[ScoredTutor], label: str) -> list[TutorProfile]:
+    logger.info("Tutors matched after %s filtering: %d", label, len(scored))
     for item in scored:
         logger.info(
-            "Tutor candidate: id=%s name=%s score=%s verified=%s views=%s shown_today=%s",
+            "%s candidate: id=%s name=%s score=%s verified=%s views=%s shown_today=%s",
+            label,
             item.tutor.id,
             item.tutor.name,
             item.score,
@@ -263,8 +270,57 @@ def search_tutors(
             item.tutor.views_count,
             item.tutor.shown_today_count,
         )
-
     ranked = _shuffle_close_scores(scored)
     return [item.tutor for item in ranked]
+
+
+def search_tutors(
+    tutors: list[TutorProfile],
+    exam: str,
+    budget_min: int | None,
+    budget_max: int | None,
+    goal: str = "",
+) -> tuple[list[TutorProfile], int]:
+    student_filters = StudentFilters(
+        exam=exam,
+        goal=goal,
+        budget_min=budget_min,
+        budget_max=budget_max,
+    )
+    keywords = get_search_keywords(exam)
+    primary_scored: list[ScoredTutor] = []
+
+    for tutor in tutors:
+        if not _is_eligible_tutor(tutor):
+            continue
+        if not description_matches(tutor.description, keywords, exam):
+            continue
+
+        score = calculate_tutor_score(tutor, student_filters)
+        if score is None:
+            continue
+        primary_scored.append(ScoredTutor(tutor=tutor, score=score))
+
+    primary = _rank_tutors(primary_scored, "primary")
+    primary_ids = {tutor.id for tutor in primary}
+
+    fallback_keywords = get_fallback_keywords(exam, goal)
+    fallback_scored: list[ScoredTutor] = []
+    if fallback_keywords:
+        for tutor in tutors:
+            if not _is_eligible_tutor(tutor):
+                continue
+            if tutor.id in primary_ids:
+                continue
+            if not description_matches_subjects(tutor.description, fallback_keywords):
+                continue
+
+            score = calculate_fallback_tutor_score(tutor, student_filters, fallback_keywords)
+            if score is None:
+                continue
+            fallback_scored.append(ScoredTutor(tutor=tutor, score=score))
+
+    fallback = _rank_tutors(fallback_scored, "fallback")
+    return primary + fallback, len(primary)
 
 

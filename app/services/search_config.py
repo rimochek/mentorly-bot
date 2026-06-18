@@ -120,6 +120,15 @@ OLYMPIAD_GRADE_KEYWORDS: dict[str, list[str]] = {
     "11 класс": ["11 класс", "11-класс"],
 }
 
+EXAM_FALLBACK_SUBJECTS: dict[str, list[str]] = {
+    "РФМШ": ["логика", "математика"],
+    "NIS": ["логика", "математика", "языки", "английский", "биология", "естествознание"],
+    "IELTS": ["английский", "english", "writing", "speaking", "reading", "grammar"],
+    "TOEFL": ["английский", "english", "writing", "speaking", "reading", "grammar"],
+    "SAT": ["math", "mathematics", "математика", "english", "reading", "writing"],
+    "NUET": ["математика", "math", "english", "английский"],
+}
+
 
 def _buttons_keyboard(buttons: list[str], columns: int = 2) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = []
@@ -209,6 +218,41 @@ def build_olympiad_goal(subject: str, grade: str) -> str:
     if subject == "Не знаю":
         return grade
     return f"{subject}, {grade}"
+
+
+def _dedupe_keywords(keywords: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for keyword in keywords:
+        kw = keyword.lower()
+        if kw in seen:
+            continue
+        seen.add(kw)
+        result.append(kw)
+    return result
+
+
+def get_fallback_keywords(exam: str, goal: str) -> list[str]:
+    keywords: list[str] = list(EXAM_FALLBACK_SUBJECTS.get(exam, []))
+
+    if exam == "ЕНТ" and goal and goal != "Не знаю":
+        keywords.extend(GOAL_KEYWORDS.get(goal, []))
+    elif exam == "AP" and goal and goal not in ("Не знаю", "Другое AP"):
+        keywords.extend(GOAL_KEYWORDS.get(goal, []))
+    elif exam == "NIS" and goal and goal not in ("Не знаю", "Общий профиль"):
+        keywords.extend(GOAL_KEYWORDS.get(goal, []))
+    elif exam == "Олимпиады":
+        if goal and "," in goal:
+            subject, _grade = [part.strip() for part in goal.split(",", 1)]
+            keywords.extend(OLYMPIAD_SUBJECT_KEYWORDS.get(subject, [subject.lower()]))
+        elif goal and goal != "Не знаю":
+            keywords.extend(OLYMPIAD_SUBJECT_KEYWORDS.get(goal, [goal.lower()]))
+    elif exam not in EXAM_FALLBACK_SUBJECTS:
+        if goal and goal != "Не знаю":
+            keywords.append(goal)
+        keywords.append(exam)
+
+    return _dedupe_keywords(keywords)
 
 
 def get_goal_match_score(description: str, exam: str, goal: str) -> int:

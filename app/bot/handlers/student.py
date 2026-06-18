@@ -56,6 +56,10 @@ NO_MATCH_TEXT = (
     "По вашему запросу пока нет подходящих репетиторов. "
     "Мы получили заявку и можем подобрать вручную."
 )
+FALLBACK_INTRO_ALL = (
+    "Точных совпадений не нашлось. Ниже — репетиторы по смежным предметам."
+)
+FALLBACK_INTRO_PARTIAL = "Дальше — репетиторы по смежным предметам."
 
 
 async def _get_browse_data(state: FSMContext) -> dict:
@@ -63,6 +67,7 @@ async def _get_browse_data(state: FSMContext) -> dict:
     return {
         "tutor_ids": data.get("tutor_ids", []),
         "current_index": data.get("current_index", 0),
+        "fallback_start_index": data.get("fallback_start_index"),
         "exam": data.get("exam", ""),
         "goal": data.get("goal", ""),
         "level": data.get("level", ""),
@@ -103,6 +108,10 @@ async def _show_tutor_at_index(
         await state.clear()
         await message.answer("По данным запросам больше нету репетиторов.\nПриходите позже, список обновляется ежедневно!", reply_markup=main_menu_keyboard())
         return
+
+    fallback_start = data.get("fallback_start_index")
+    if fallback_start is not None and index == fallback_start and fallback_start > 0:
+        await message.answer(FALLBACK_INTRO_PARTIAL)
 
     tutor_repo = TutorRepository(session)
     tutor = await tutor_repo.get_by_id(tutor_ids[index])
@@ -330,7 +339,7 @@ async def process_budget(
 
     tutor_repo = TutorRepository(session)
     tutors = await tutor_repo.get_active_tutors()
-    matched = search_tutors(tutors, exam, budget_min, budget_max, goal=goal)
+    matched, primary_count = search_tutors(tutors, exam, budget_min, budget_max, goal=goal)
 
     if not matched:
         await track_event(
@@ -354,6 +363,7 @@ async def process_budget(
         return
 
     tutor_ids = [t.id for t in matched]
+    fallback_start_index = primary_count if primary_count < len(matched) else None
     await track_event(
         message.from_user.id,
         EVENT_SEARCH,
@@ -366,19 +376,27 @@ async def process_budget(
             "budget_text": budget_text,
             "search_id": search.id,
             "matched_count": len(tutor_ids),
+            "primary_count": primary_count,
+            "fallback_count": len(tutor_ids) - primary_count,
         },
     )
     await state.update_data(
         tutor_ids=tutor_ids,
         current_index=0,
+        fallback_start_index=fallback_start_index,
         exam=exam,
         goal=goal,
         level=level,
         budget_text=budget_text,
     )
     await state.set_state(StudentSearchStates.browsing)
+    intro_text = "Мы нашли репетиторов! Смотрите анкеты:"
+    if fallback_start_index == 0:
+        intro_text = FALLBACK_INTRO_ALL
+    elif fallback_start_index is not None:
+        intro_text = "Мы нашли репетиторов! Сначала — точные совпадения, ниже — по смежным предметам."
     await message.answer(
-        "Мы нашли репетиторов! Смотрите анкеты:",
+        intro_text,
         reply_markup=browse_keyboard(),
     )
     await _show_tutor_at_index(message, session, state, 0)
