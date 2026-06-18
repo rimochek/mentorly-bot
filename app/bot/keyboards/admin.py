@@ -5,6 +5,18 @@ from app.database.repositories.tutors import MODERATION_APPROVED, MODERATION_HID
 from app.services.user_contact import build_contact_keyboard
 
 
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
+            [InlineKeyboardButton(text="📋 Модерация анкет", callback_data="adm:profiles")],
+            [InlineKeyboardButton(text="📢 Рассылка: всем", callback_data="adm:broadcast:all")],
+            [InlineKeyboardButton(text="📢 Репетиторам", callback_data="adm:broadcast:tutors")],
+            [InlineKeyboardButton(text="📢 Ученикам", callback_data="adm:broadcast:students")],
+        ]
+    )
+
+
 def admin_profiles_filter_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

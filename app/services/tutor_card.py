@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_CAPTION_MAX = 1024
 TELEGRAM_MESSAGE_MAX = 4096
-TUTOR_DESCRIPTION_MAX = 2000
+from app.constants.text_limits import TUTOR_DESCRIPTION_MAX
 
 
 def truncate_text(text: str, limit: int, suffix: str = "…") -> str:

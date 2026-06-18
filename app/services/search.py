@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from app.database.models import TutorProfile
 from app.database.repositories.tutors import MODERATION_APPROVED
+from app.services.search_config import get_goal_match_score
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,13 @@ BUDGET_RANGES: dict[str, tuple[int | None, int | None]] = {
 }
 
 SCORE_SHUFFLE_THRESHOLD = 10
+VERIFIED_BONUS = 8
 
 
 @dataclass
 class StudentFilters:
     exam: str
+    goal: str
     budget_min: int | None
     budget_max: int | None
 
@@ -170,6 +173,10 @@ def _activity_penalty(tutor: TutorProfile) -> int:
     return 0
 
 
+def _verified_bonus(tutor: TutorProfile) -> int:
+    return VERIFIED_BONUS if tutor.is_verified else 0
+
+
 def calculate_tutor_score(tutor: TutorProfile, student_filters: StudentFilters) -> int | None:
     keywords = get_search_keywords(student_filters.exam)
     exam_match_score = get_exam_match_score(tutor.description, keywords, student_filters.exam)
@@ -179,10 +186,12 @@ def calculate_tutor_score(tutor: TutorProfile, student_filters: StudentFilters) 
     now = datetime.now(timezone.utc)
     score = (
         exam_match_score
+        + get_goal_match_score(tutor.description, student_filters.exam, student_filters.goal)
         + _budget_match_score(tutor, student_filters.budget_min, student_filters.budget_max)
         + _fairness_score(tutor)
         + _freshness_score(tutor, now)
         + _activity_penalty(tutor)
+        + _verified_bonus(tutor)
     )
     return score
 
@@ -219,8 +228,14 @@ def search_tutors(
     exam: str,
     budget_min: int | None,
     budget_max: int | None,
+    goal: str = "",
 ) -> list[TutorProfile]:
-    student_filters = StudentFilters(exam=exam, budget_min=budget_min, budget_max=budget_max)
+    student_filters = StudentFilters(
+        exam=exam,
+        goal=goal,
+        budget_min=budget_min,
+        budget_max=budget_max,
+    )
     keywords = get_search_keywords(exam)
     scored: list[ScoredTutor] = []
 
@@ -249,9 +264,7 @@ def search_tutors(
             item.tutor.shown_today_count,
         )
 
-    verified = [item for item in scored if item.tutor.is_verified]
-    non_verified = [item for item in scored if not item.tutor.is_verified]
-    ranked = _shuffle_close_scores(verified) + _shuffle_close_scores(non_verified)
+    ranked = _shuffle_close_scores(scored)
     return [item.tutor for item in ranked]
 
 

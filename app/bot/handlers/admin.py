@@ -10,9 +10,11 @@ from app.bot.filters.admin import AdminFilter
 from app.bot.keyboards.admin import (
     admin_moderation_keyboard,
     admin_moderation_status_label,
+    admin_panel_keyboard,
     admin_profiles_filter_keyboard,
 )
-from app.bot.states.admin import AdminModerationStates
+from app.bot.states.admin import AdminBroadcastStates, AdminModerationStates
+from app.constants.text_limits import BROADCAST_MESSAGE_MAX, format_length_error, is_within_limit
 from app.database.repositories.analytics import AnalyticsRepository
 from app.database.repositories.tutors import (
     MODERATION_APPROVED,
@@ -20,7 +22,9 @@ from app.database.repositories.tutors import (
     MODERATION_REJECTED,
     TutorRepository,
 )
+from app.database.repositories.users import UserRepository
 from app.services.analytics import format_admin_stats
+from app.services.broadcast import AUDIENCE_LABELS, send_broadcast
 from app.services.tutor_card import send_tutor_card
 
 router = Router()
@@ -110,6 +114,20 @@ async def _start_browse(
     await _show_admin_tutor_at_index(message, session, state, 0, bot)
 
 
+async def _send_admin_panel(message: Message) -> None:
+    await message.answer(
+        "Панель администратора\n\n"
+        "Выберите действие:",
+        reply_markup=admin_panel_keyboard(),
+    )
+
+
+@router.message(Command("admin"), AdminFilter())
+async def cmd_admin(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _send_admin_panel(message)
+
+
 @router.message(Command("stats"), AdminFilter())
 async def cmd_stats(message: Message, session: AsyncSession) -> None:
     repo = AnalyticsRepository(session)
@@ -122,6 +140,88 @@ async def cmd_profiles(message: Message, session: AsyncSession) -> None:
     tutor_repo = TutorRepository(session)
     counts = await tutor_repo.get_moderation_counts()
     await message.answer(_format_profiles_summary(counts), reply_markup=admin_profiles_filter_keyboard())
+
+
+@router.callback_query(F.data == "adm:stats", AdminFilter())
+async def admin_panel_stats(callback: CallbackQuery, session: AsyncSession) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    repo = AnalyticsRepository(session)
+    stats = await repo.get_admin_stats()
+    await callback.answer()
+    await callback.message.answer(format_admin_stats(stats))
+
+
+@router.callback_query(F.data == "adm:profiles", AdminFilter())
+async def admin_panel_profiles(callback: CallbackQuery, session: AsyncSession) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    tutor_repo = TutorRepository(session)
+    counts = await tutor_repo.get_moderation_counts()
+    await callback.answer()
+    await callback.message.answer(
+        _format_profiles_summary(counts),
+        reply_markup=admin_profiles_filter_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:broadcast:"), AdminFilter())
+async def admin_start_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+
+    audience = callback.data.split(":")[2]
+    if audience not in AUDIENCE_LABELS:
+        await callback.answer("Неизвестная аудитория", show_alert=True)
+        return
+
+    await state.set_state(AdminBroadcastStates.waiting_message)
+    await state.update_data(broadcast_audience=audience)
+    await callback.answer()
+    await callback.message.answer(
+        f"Рассылка {AUDIENCE_LABELS[audience]}.\n\n"
+        f"Отправьте текст сообщения (максимум {BROADCAST_MESSAGE_MAX} символов).\n"
+        "Для отмены отправьте /admin",
+    )
+
+
+@router.message(AdminBroadcastStates.waiting_message, AdminFilter())
+async def admin_send_broadcast(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+    text = message.text.strip() if message.text else ""
+    if not text:
+        await message.answer("Отправьте текст сообщения.")
+        return
+    if not is_within_limit(text, BROADCAST_MESSAGE_MAX):
+        await message.answer(format_length_error(BROADCAST_MESSAGE_MAX, len(text)))
+        return
+
+    data = await state.get_data()
+    audience = data.get("broadcast_audience", "all")
+    user_repo = UserRepository(session)
+    telegram_ids = await user_repo.get_telegram_ids_by_audience(audience)
+
+    if not telegram_ids:
+        await state.clear()
+        await message.answer("Нет получателей для выбранной аудитории.")
+        return
+
+    await message.answer(f"Рассылка началась… Получателей: {len(telegram_ids)}")
+    sent, failed = await send_broadcast(bot, telegram_ids, text)
+    await state.clear()
+    await message.answer(
+        f"Рассылка завершена.\n"
+        f"Отправлено: {sent}\n"
+        f"Ошибок: {failed}",
+        reply_markup=admin_panel_keyboard(),
+    )
 
 
 @router.callback_query(F.data.startswith("adm:filter:"), AdminFilter())
@@ -292,7 +392,7 @@ async def admin_verify_tutor(
         await _notify_tutor_moderation(
             bot,
             tutor,
-            "Вам выдан статус ✅ Verified Mentor! Теперь вы будете показываться первыми среди подходящих репетиторов.",
+            "Вам выдан статус ✅ Verified Mentor! Теперь у вас есть приоритет при поиске подходящих репетиторов.",
         )
         await callback.answer("Verified Mentor выдан.")
     else:

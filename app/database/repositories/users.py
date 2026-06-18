@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -64,3 +64,12 @@ class UserRepository:
             .where(User.id == user_id)
         )
         return result.scalar_one_or_none()
+
+    async def get_telegram_ids_by_audience(self, audience: str) -> list[int]:
+        query = select(User.telegram_id)
+        if audience == "tutors":
+            query = query.where(User.role == "tutor")
+        elif audience == "students":
+            query = query.where(or_(User.role.is_(None), User.role != "tutor"))
+        result = await self.session.execute(query)
+        return list(result.scalars().all())

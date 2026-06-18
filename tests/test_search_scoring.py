@@ -18,6 +18,7 @@ from app.services.search import (
     parse_budget,
     search_tutors,
 )
+from app.services.search_config import get_goal_match_score, resolve_exam_detail
 
 from tests.conftest import make_tutor
 
@@ -94,11 +95,11 @@ class TestFairnessFreshnessPenalty:
 class TestCalculateTutorScore:
     def test_returns_none_without_exam_match(self) -> None:
         tutor = make_tutor(description="Математика")
-        filters = StudentFilters(exam="IELTS", budget_min=3000, budget_max=5000)
+        filters = StudentFilters(exam="IELTS", goal="7.0", budget_min=3000, budget_max=5000)
         assert calculate_tutor_score(tutor, filters) is None
 
     def test_higher_score_for_new_tutor_with_budget_fit(self) -> None:
-        filters = StudentFilters(exam="IELTS", budget_min=3000, budget_max=5000)
+        filters = StudentFilters(exam="IELTS", goal="7.0", budget_min=3000, budget_max=5000)
         new_tutor = make_tutor(id=1, views_count=0, price_min=4000, price_max=5000)
         old_tutor = make_tutor(
             id=2,
@@ -126,7 +127,7 @@ class TestSearchTutors:
         assert len(result) == 1
         assert result[0].id == 1
 
-    def test_verified_tutors_appear_first(self) -> None:
+    def test_verified_bonus_can_be_outranked(self) -> None:
         verified = make_tutor(
             id=1,
             is_verified=True,
@@ -146,8 +147,18 @@ class TestSearchTutors:
             description="IELTS 8.0",
         )
         random.seed(42)
-        result = search_tutors([regular, verified], "IELTS", 3000, 5000)
-        assert result[0].id == 1
+        result = search_tutors([verified, regular], "IELTS", 3000, 5000)
+        assert result[0].id == 2
+
+    def test_verified_bonus_adds_eight_points(self) -> None:
+        filters = StudentFilters(exam="IELTS", goal="", budget_min=3000, budget_max=5000)
+        verified = make_tutor(is_verified=True, description="IELTS 8.0")
+        regular = make_tutor(id=2, is_verified=False, description="IELTS 8.0")
+        verified_score = calculate_tutor_score(verified, filters)
+        regular_score = calculate_tutor_score(regular, filters)
+        assert verified_score is not None
+        assert regular_score is not None
+        assert verified_score - regular_score == 8
 
     def test_verified_without_exam_match_excluded(self) -> None:
         verified = make_tutor(id=1, is_verified=True, description="Only SAT prep")
@@ -187,3 +198,28 @@ class TestSearchTutors:
         top_ids = {item.tutor.id for item in shuffled[:3]}
         assert top_ids == {1, 2, 3}
         assert shuffled[3].tutor.id == 4
+
+
+class TestGoalSoftMatch:
+    def test_ielts_goal_bonus(self) -> None:
+        with_goal = make_tutor(description="IELTS preparation, band 7.0")
+        without_goal = make_tutor(id=2, description="IELTS preparation")
+        filters = StudentFilters(exam="IELTS", goal="7.0", budget_min=3000, budget_max=5000)
+        assert calculate_tutor_score(with_goal, filters) > calculate_tutor_score(without_goal, filters)
+
+    def test_ent_profile_bonus(self) -> None:
+        tutor = make_tutor(description="ЕНТ физмат, математика и физика")
+        filters = StudentFilters(exam="ЕНТ", goal="Физмат", budget_min=3000, budget_max=5000)
+        assert get_goal_match_score(tutor.description, "ЕНТ", "Физмат") > 0
+
+    def test_goal_no_match_still_in_results(self) -> None:
+        generic = make_tutor(id=1, description="IELTS tutor")
+        specific = make_tutor(id=2, description="IELTS band 7.0 specialist")
+        result = search_tutors([generic, specific], "IELTS", 3000, 5000, goal="7.0")
+        assert len(result) == 2
+        assert result[0].id == 2
+
+    def test_resolve_ent_profiles(self) -> None:
+        assert resolve_exam_detail("ЕНТ", "Физмат") == "Физмат"
+        assert resolve_exam_detail("ЕНТ", "Био + География") == "Биология + География"
+        assert resolve_exam_detail("AP", "Biology") == "AP Biology"

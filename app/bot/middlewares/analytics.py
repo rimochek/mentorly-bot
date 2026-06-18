@@ -13,6 +13,7 @@ from app.bot.keyboards.reply import (
     SKIP_PHOTO,
     TUTOR_CABINET_BUTTONS,
 )
+from app.services.search_config import all_search_flow_buttons
 from app.services.analytics import EVENT_BUTTON, EVENT_CALLBACK, track_event
 
 KNOWN_BUTTONS = frozenset(
@@ -23,6 +24,7 @@ KNOWN_BUTTONS = frozenset(
     + LEVEL_BUTTONS
     + BUDGET_BUTTONS
     + [SKIP_PHOTO, SHARE_LOCATION, "🧑‍🏫 Стать репетитором"]
+    + list(all_search_flow_buttons())
 )
 
 

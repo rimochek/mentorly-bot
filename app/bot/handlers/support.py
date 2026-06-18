@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards.reply import MAIN_MENU_BUTTONS, main_menu_keyboard
 from app.bot.states.support import SupportStates
 from app.database.repositories.users import UserRepository
+from app.constants.text_limits import SUPPORT_MESSAGE_MAX, format_length_error, is_within_limit
 from app.services.notifications import NotificationService
 from app.services.analytics import EVENT_SUPPORT, track_event
 
@@ -40,8 +41,13 @@ async def process_support_message(
         await state.clear()
         return
 
+    text = message.text.strip()
+    if not is_within_limit(text, SUPPORT_MESSAGE_MAX):
+        await message.answer(format_length_error(SUPPORT_MESSAGE_MAX, len(text)))
+        return
+
     notifications = NotificationService(bot)
-    await notifications.notify_support_complaint(user, message.text.strip())
+    await notifications.notify_support_complaint(user, text)
 
     await track_event(
         message.from_user.id,

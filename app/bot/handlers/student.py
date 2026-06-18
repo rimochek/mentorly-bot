@@ -27,7 +27,25 @@ from app.services.analytics import (
     track_event,
 )
 from app.services.user_contact import build_contact_keyboard
+from app.constants.text_limits import (
+    EXAM_CUSTOM_MAX,
+    GOAL_CUSTOM_MAX,
+    format_length_error,
+    is_within_limit,
+)
 from app.services.search import parse_budget, search_tutors
+from app.services.search_config import (
+    OLYMPIAD_GRADES,
+    OLYMPIAD_SUBJECTS,
+    build_olympiad_goal,
+    exam_detail_keyboard,
+    get_exam_detail_prompt,
+    is_ap_custom_goal,
+    olympiad_grade_keyboard,
+    olympiad_subject_keyboard,
+    resolve_exam_detail,
+    skips_goal_step,
+)
 from app.services.tutor_card import send_tutor_card
 from app.services.tutor_stats import increment_tutor_contact, increment_tutor_view
 
@@ -50,6 +68,15 @@ async def _get_browse_data(state: FSMContext) -> dict:
         "level": data.get("level", ""),
         "budget_text": data.get("budget_text", ""),
     }
+
+
+async def _go_to_level(message: Message, state: FSMContext, goal: str) -> None:
+    await state.update_data(goal=goal)
+    await state.set_state(StudentSearchStates.level)
+    await message.answer(
+        "Какой у вас текущий уровень?",
+        reply_markup=level_keyboard(),
+    )
 
 
 async def _track_browse_end(telegram_id: int, reason: str, cards_viewed: int) -> None:
@@ -113,29 +140,145 @@ async def process_exam(message: Message, state: FSMContext) -> None:
 
     exam = message.text.strip()
     if exam == "Другое":
+        await state.set_state(StudentSearchStates.custom_exam_name)
         await message.answer("Напишите название экзамена:")
         return
 
     await state.update_data(exam=exam)
-    await state.set_state(StudentSearchStates.goal)
+
+    if skips_goal_step(exam):
+        await _go_to_level(message, state, exam)
+        return
+
+    if exam == "Олимпиады":
+        await state.set_state(StudentSearchStates.olympiad_subject)
+        await message.answer(
+            "Выберите предмет олимпиады:",
+            reply_markup=olympiad_subject_keyboard(),
+        )
+        return
+
+    keyboard = exam_detail_keyboard(exam)
+    if keyboard is None:
+        await state.set_state(StudentSearchStates.custom_goal)
+        await message.answer(
+            "Кратко укажите цель подготовки:",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await state.set_state(StudentSearchStates.exam_detail)
+    await message.answer(get_exam_detail_prompt(exam), reply_markup=keyboard)
+
+
+@router.message(StudentSearchStates.custom_exam_name)
+async def process_custom_exam_name(message: Message, state: FSMContext) -> None:
+    if message.text in MAIN_MENU_BUTTONS:
+        return
+
+    exam = message.text.strip()
+    if not exam:
+        await message.answer("Введите название экзамена:")
+        return
+    if not is_within_limit(exam, EXAM_CUSTOM_MAX):
+        await message.answer(format_length_error(EXAM_CUSTOM_MAX, len(exam)))
+        return
+
+    await state.update_data(exam=exam)
+    await state.set_state(StudentSearchStates.custom_goal)
     await message.answer(
-        "Какую цель вы ставите?\n\n"
-        "Примеры: IELTS 7.0+, SAT 1400+, Поступить в NU, Подтянуть математику",
+        "Кратко укажите цель подготовки:",
         reply_markup=main_menu_keyboard(),
     )
 
 
-@router.message(StudentSearchStates.goal)
-async def process_goal(message: Message, state: FSMContext) -> None:
+@router.message(StudentSearchStates.exam_detail)
+async def process_exam_detail(message: Message, state: FSMContext) -> None:
     if message.text in MAIN_MENU_BUTTONS:
         return
 
-    await state.update_data(goal=message.text.strip())
-    await state.set_state(StudentSearchStates.level)
+    data = await state.get_data()
+    exam = data.get("exam", "")
+    goal = resolve_exam_detail(exam, message.text or "")
+    if goal is None:
+        await message.answer("Выберите вариант из списка на клавиатуре.")
+        return
+
+    if is_ap_custom_goal(goal):
+        await state.set_state(StudentSearchStates.ap_custom)
+        await message.answer(
+            "Напишите предмет AP:",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await _go_to_level(message, state, goal)
+
+
+@router.message(StudentSearchStates.ap_custom)
+async def process_ap_custom(message: Message, state: FSMContext) -> None:
+    if message.text in MAIN_MENU_BUTTONS:
+        return
+
+    goal = message.text.strip()
+    if not goal:
+        await message.answer("Напишите предмет AP:")
+        return
+    if not is_within_limit(goal, GOAL_CUSTOM_MAX):
+        await message.answer(format_length_error(GOAL_CUSTOM_MAX, len(goal)))
+        return
+
+    await _go_to_level(message, state, f"AP {goal}")
+
+
+@router.message(StudentSearchStates.custom_goal)
+async def process_custom_goal(message: Message, state: FSMContext) -> None:
+    if message.text in MAIN_MENU_BUTTONS:
+        return
+
+    goal = message.text.strip()
+    if not goal:
+        await message.answer("Укажите цель подготовки:")
+        return
+    if not is_within_limit(goal, GOAL_CUSTOM_MAX):
+        await message.answer(format_length_error(GOAL_CUSTOM_MAX, len(goal)))
+        return
+
+    await _go_to_level(message, state, goal)
+
+
+@router.message(StudentSearchStates.olympiad_subject)
+async def process_olympiad_subject(message: Message, state: FSMContext) -> None:
+    if message.text in MAIN_MENU_BUTTONS:
+        return
+
+    subject = message.text.strip()
+    if subject not in OLYMPIAD_SUBJECTS:
+        await message.answer("Выберите предмет из списка на клавиатуре.")
+        return
+
+    await state.update_data(olympiad_subject=subject)
+    await state.set_state(StudentSearchStates.olympiad_grade)
     await message.answer(
-        "Какой у вас текущий уровень?",
-        reply_markup=level_keyboard(),
+        "Выберите класс:",
+        reply_markup=olympiad_grade_keyboard(),
     )
+
+
+@router.message(StudentSearchStates.olympiad_grade)
+async def process_olympiad_grade(message: Message, state: FSMContext) -> None:
+    if message.text in MAIN_MENU_BUTTONS:
+        return
+
+    grade = message.text.strip()
+    if grade not in OLYMPIAD_GRADES:
+        await message.answer("Выберите класс из списка на клавиатуре.")
+        return
+
+    data = await state.get_data()
+    subject = data.get("olympiad_subject", "")
+    goal = build_olympiad_goal(subject, grade)
+    await _go_to_level(message, state, goal)
 
 
 @router.message(StudentSearchStates.level)
@@ -187,7 +330,7 @@ async def process_budget(
 
     tutor_repo = TutorRepository(session)
     tutors = await tutor_repo.get_active_tutors()
-    matched = search_tutors(tutors, exam, budget_min, budget_max)
+    matched = search_tutors(tutors, exam, budget_min, budget_max, goal=goal)
 
     if not matched:
         await track_event(

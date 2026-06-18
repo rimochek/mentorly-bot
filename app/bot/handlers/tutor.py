@@ -19,7 +19,15 @@ from app.database.repositories.users import UserRepository
 from app.services.geocoding import get_city_from_coordinates
 from app.services.notifications import NotificationService
 from app.services.analytics import EVENT_SUPPORT, EVENT_TUTOR, track_event
-from app.services.tutor_card import TUTOR_DESCRIPTION_MAX, format_moderation_status, send_tutor_card
+from app.services.tutor_card import format_moderation_status, send_tutor_card
+from app.constants.text_limits import (
+    CITY_MAX,
+    NAME_MAX,
+    PLACE_OF_STUDY_MAX,
+    TUTOR_DESCRIPTION_MAX,
+    format_length_error,
+    is_within_limit,
+)
 from app.services.tutor_stats import format_tutor_stats
 
 router = Router()
@@ -93,7 +101,11 @@ async def become_tutor(message: Message, state: FSMContext, session: AsyncSessio
 
 @router.message(TutorRegistrationStates.name)
 async def reg_name(message: Message, state: FSMContext) -> None:
-    await state.update_data(name=message.text.strip())
+    name = message.text.strip()
+    if not is_within_limit(name, NAME_MAX):
+        await message.answer(format_length_error(NAME_MAX, len(name)))
+        return
+    await state.update_data(name=name)
     await state.set_state(TutorRegistrationStates.age)
     await message.answer("Введите ваш возраст:")
 
@@ -115,7 +127,10 @@ async def reg_age(message: Message, state: FSMContext) -> None:
 
 
 async def _proceed_after_city(message: Message, state: FSMContext, city: str) -> None:
-    await state.update_data(city=city)
+    if not is_within_limit(city, CITY_MAX):
+        await message.answer(format_length_error(CITY_MAX, len(city.strip())))
+        return
+    await state.update_data(city=city.strip())
     await state.set_state(TutorRegistrationStates.place_of_study)
     await message.answer(
         "Укажите место учёбы:",
@@ -151,7 +166,11 @@ async def reg_city(message: Message, state: FSMContext) -> None:
 
 @router.message(TutorRegistrationStates.place_of_study)
 async def reg_place(message: Message, state: FSMContext) -> None:
-    await state.update_data(place_of_study=message.text.strip())
+    place = message.text.strip()
+    if not is_within_limit(place, PLACE_OF_STUDY_MAX):
+        await message.answer(format_length_error(PLACE_OF_STUDY_MAX, len(place)))
+        return
+    await state.update_data(place_of_study=place)
     await state.set_state(TutorRegistrationStates.price_min)
     await message.answer("Укажите минимальную цену за занятие (в тенге):")
 
@@ -183,11 +202,8 @@ async def reg_price_max(message: Message, state: FSMContext) -> None:
 @router.message(TutorRegistrationStates.description)
 async def reg_description(message: Message, state: FSMContext) -> None:
     description = message.text.strip()
-    if len(description) > TUTOR_DESCRIPTION_MAX:
-        await message.answer(
-            f"Описание слишком длинное. Максимум {TUTOR_DESCRIPTION_MAX} символов "
-            f"(сейчас {len(description)})."
-        )
+    if not is_within_limit(description, TUTOR_DESCRIPTION_MAX):
+        await message.answer(format_length_error(TUTOR_DESCRIPTION_MAX, len(description)))
         return
     await state.update_data(description=description)
     await state.set_state(TutorRegistrationStates.photo)
@@ -355,11 +371,14 @@ async def edit_field_value(message: Message, state: FSMContext, session: AsyncSe
         return
 
     value: str | int = message.text.strip()
-    if field == "description" and len(value) > TUTOR_DESCRIPTION_MAX:
-        await message.answer(
-            f"Описание слишком длинное. Максимум {TUTOR_DESCRIPTION_MAX} символов "
-            f"(сейчас {len(value)})."
-        )
+    field_limits = {
+        "name": NAME_MAX,
+        "city": CITY_MAX,
+        "place_of_study": PLACE_OF_STUDY_MAX,
+        "description": TUTOR_DESCRIPTION_MAX,
+    }
+    if field in field_limits and not is_within_limit(str(value), field_limits[field]):
+        await message.answer(format_length_error(field_limits[field], len(str(value))))
         return
     if field in ("age", "price_min", "price_max"):
         try:
