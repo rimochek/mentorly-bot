@@ -17,8 +17,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -34,7 +32,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "0"
-      REDIS_URL: ""
+      REDIS_URL: redis://redis:6379/0
     command: sh -c "alembic upgrade head && python -m app.main"
     depends_on:
       postgres:

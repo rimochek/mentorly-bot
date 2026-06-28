@@ -30,16 +30,25 @@ async def ensure_redis_writable(redis: Redis) -> None:
         await redis.delete(REDIS_WRITE_PROBE_KEY)
     except ReadOnlyError as exc:
         logger.error(
-            "Redis is read-only. FSM storage requires a writable primary Redis instance. "
-            "Check REDIS_URL / REDIS_HOST in .env — do not use a read replica endpoint."
+            "Redis is read-only (%s). FSM storage requires a writable primary Redis instance. "
+            "For docker compose use REDIS_URL=redis://redis:6379/0 and rebuild without .env in the image.",
+            settings_redis_target(get_settings()),
         )
         raise SystemExit(1) from exc
+
+
+def settings_redis_target(settings) -> str:
+    url = settings.redis_url
+    if "@" in url:
+        return url.split("@", 1)[1]
+    return url.removeprefix("redis://")
 
 
 async def main() -> None:
     settings = get_settings()
 
     redis = Redis.from_url(settings.redis_url)
+    logger.info("Connecting to Redis at %s", settings_redis_target(settings))
     await ensure_redis_writable(redis)
     storage = RedisStorage(redis=redis)
 
