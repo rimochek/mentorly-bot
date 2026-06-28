@@ -1,5 +1,7 @@
 from functools import lru_cache
+from urllib.parse import quote
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,9 +17,18 @@ class Settings(BaseSettings):
     postgres_user: str = "mentorly"
     postgres_password: str = "mentorly"
 
+    redis_connection_url: str | None = Field(default=None, validation_alias="REDIS_URL")
     redis_host: str = "redis"
     redis_port: int = 6379
     redis_db: int = 0
+    redis_password: str = ""
+
+    @field_validator("redis_connection_url", mode="before")
+    @classmethod
+    def empty_redis_url_is_none(cls, value: str | None) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        return str(value).strip()
 
     @property
     def database_url(self) -> str:
@@ -28,6 +39,16 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
+        if self.redis_connection_url:
+            return self.redis_connection_url
+
+        if self.redis_password:
+            encoded_password = quote(self.redis_password, safe="")
+            return (
+                f"redis://:{encoded_password}@{self.redis_host}:"
+                f"{self.redis_port}/{self.redis_db}"
+            )
+
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @property

@@ -29,6 +29,12 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_URL: ""
     command: sh -c "alembic upgrade head && python -m app.main"
     depends_on:
       postgres:
